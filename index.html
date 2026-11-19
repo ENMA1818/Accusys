@@ -90,12 +90,13 @@ body {
 .node {
   position: absolute; width: 180px;
   background: var(--node-bg); border: 1.5px solid var(--node-border);
-  border-radius: 8px; padding: 8px 10px;
+  border-radius: 8px; padding: 8px 10px; cursor: grab;
   box-shadow: 0 1px 3px var(--shadow); z-index: 10;
   transition: box-shadow .15s;
   user-select: none;
 }
 .node:hover { box-shadow: 0 3px 12px var(--shadow); }
+.node.dragging { opacity: .85; cursor: grabbing; z-index: 50; box-shadow: 0 6px 20px var(--shadow); }
 .node-title {
   font-family: var(--ff-display); font-size: 13px; font-weight: 600;
   margin-bottom: 4px; line-height: 1.3;
@@ -127,6 +128,61 @@ body {
 
 /* App layout */
 .app { display: flex; flex-direction: column; height: 100%; }
+
+.toolbar { display: flex; gap: 6px; margin-left: auto; }
+.tbtn {
+  padding: 5px 10px; border-radius: 5px; border: 1px solid var(--border);
+  background: var(--bg2); color: var(--fg); cursor: pointer;
+  font-size: 12px; font-family: var(--ff-body); font-weight: 500;
+  display: flex; align-items: center; gap: 4px; transition: all .15s;
+}
+.tbtn:hover { border-color: var(--accent); color: var(--accent); }
+.tbtn.active-mode { background: var(--accent); color: var(--accent-fg); border-color: var(--accent); }
+
+.node-delete {
+  position: absolute; top: -6px; right: -6px; width: 18px; height: 18px;
+  border-radius: 50%; background: var(--danger); color: #fff;
+  border: none; cursor: pointer; font-size: 11px; line-height: 18px;
+  text-align: center; display: none; z-index: 15;
+}
+.node:hover .node-delete { display: block; }
+
+.edit-panel {
+  position: fixed; right: 0; top: 0; bottom: 0; width: 300px;
+  background: var(--bg2); border-left: 1px solid var(--border);
+  z-index: 100; padding: 16px; overflow-y: auto; transform: translateX(100%);
+  transition: transform .2s ease;
+}
+.edit-panel.open { transform: translateX(0); }
+.edit-panel h3 {
+  font-family: var(--ff-display); font-size: 15px; font-weight: 700;
+  margin-bottom: 14px;
+}
+.field { margin-bottom: 12px; }
+.field label {
+  display: block; font-size: 11px; font-weight: 600; color: var(--fg2);
+  text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 4px;
+}
+.field input, .field textarea, .field select {
+  width: 100%; padding: 7px 10px; border: 1px solid var(--border);
+  border-radius: 5px; background: var(--bg); color: var(--fg);
+  font-family: var(--ff-body); font-size: 13px;
+}
+.field textarea { resize: vertical; min-height: 60px; }
+.panel-actions { display: flex; gap: 8px; margin-top: 16px; }
+.btn-save {
+  padding: 7px 16px; border-radius: 5px; border: none;
+  background: var(--accent); color: var(--accent-fg);
+  font-weight: 600; cursor: pointer; font-size: 13px;
+}
+.btn-cancel {
+  padding: 7px 16px; border-radius: 5px; border: 1px solid var(--border);
+  background: var(--bg); color: var(--fg); cursor: pointer; font-size: 13px;
+}
+.hint {
+  font-size: 11px; color: var(--fg2); background: var(--panel-bg);
+  padding: 6px 10px; border-radius: 6px; margin-left: 8px; white-space: nowrap;
+}
 </style>
 </head>
 <body>
@@ -134,10 +190,36 @@ body {
 <div class="app">
   <div class="header">
     <h1>Flujo Comercial Accusys — Cliente Nuevo</h1>
-    <span class="status-badge">Confidencial · Octubre 2026</span>
+    <div class="toolbar" id="toolbar">
+      <button class="tbtn" onclick="addNode()">＋ Caja</button>
+      <button class="tbtn" onclick="resetBoard()">↺ Restaurar original</button>
+    </div>
+    <span class="status-badge" id="statusBadge">Edición local</span>
   </div>
   <div class="board-wrap" id="boardWrap">
     <div id="boardContainer"></div>
+  </div>
+</div>
+<div class="edit-panel" id="editPanel">
+  <h3>Editar caja</h3>
+  <div class="field"><label>Título</label><input id="epTitle" /></div>
+  <div class="field"><label>Descripción</label><textarea id="epText"></textarea></div>
+  <div class="field"><label>Herramienta</label>
+    <select id="epTool">
+      <option value="">— Ninguna —</option>
+      <option value="apollo">Apollo</option>
+      <option value="lead">Lead (HubSpot)</option>
+      <option value="negocio">Negocio (HubSpot)</option>
+      <option value="ticket">Ticket (HubSpot)</option>
+      <option value="empresa">Empresa (HubSpot)</option>
+      <option value="manual">Fuera de HubSpot</option>
+    </select>
+  </div>
+  <div class="field"><label>Etapa / Registro</label><input id="epStage" /></div>
+  <div class="field"><label>Carril</label><select id="epLane"></select></div>
+  <div class="panel-actions">
+    <button class="btn-save" onclick="saveNode()">Guardar</button>
+    <button class="btn-cancel" onclick="closePanel()">Cancelar</button>
   </div>
 </div>
 
@@ -148,7 +230,7 @@ const TOOL_COLORS = {
 };
 const LANE_COLORS = {pm:'var(--lane-pm)',comercial:'var(--lane-comercial)',gestion:'var(--lane-gestion)',soporte:'var(--lane-soporte)'};
 
-const BOARD = {
+const DEFAULT_BOARD = {
   "lanes": [
     { "id": "pm", "name": "PM · Enmanuel · Ivette" },
     { "id": "comercial", "name": "Comercial - Ventas (Adriana - Nico)" },
@@ -193,6 +275,27 @@ const BOARD = {
     { "id": "e16", "from": "n14", "to": "n15", "label": "" }
   ]
 };
+
+const STORAGE_KEY = 'accusys-flujo-cliente-nuevo';
+let BOARD = loadBoard();
+
+function loadBoard() {
+  try {
+    const saved = localStorage.getItem(STORAGE_KEY);
+    if (saved) return JSON.parse(saved);
+  } catch (e) { /* private window / blocked storage — fall back */ }
+  return JSON.parse(JSON.stringify(DEFAULT_BOARD));
+}
+
+function persistBoard() {
+  try { localStorage.setItem(STORAGE_KEY, JSON.stringify(BOARD)); } catch (e) { /* ignore */ }
+}
+
+function resetBoard() {
+  BOARD = JSON.parse(JSON.stringify(DEFAULT_BOARD));
+  persistBoard();
+  renderBoard();
+}
 
 function esc(s) { const d = document.createElement('div'); d.textContent = s || ''; return d.innerHTML; }
 
@@ -244,13 +347,15 @@ function renderBoard() {
 
     nodes.filter(n => n.lane === lane.id).forEach(n => {
       const tc = n.tool ? TOOL_COLORS[n.tool] || 'var(--fg2)' : '';
-      html += `<div class="node" style="left:${n.x||0}px;top:${n.y||0}px">
+      html += `<div class="node" data-id="${n.id}" style="left:${n.x||0}px;top:${n.y||0}px"
+        onmousedown="startDrag(event,'${n.id}')" ondblclick="editNode('${n.id}')">
         <div class="node-title">${esc(n.title||'Sin título')}</div>
         ${n.text ? `<div class="node-text">${esc(n.text)}</div>` : ''}
         <div class="node-meta">
           ${n.tool ? `<span class="tool-chip" style="background:${tc}">${esc(n.tool)}</span>` : ''}
           ${n.stage ? `<span class="stage-chip">${esc(n.stage)}</span>` : ''}
         </div>
+        <button class="node-delete" onclick="event.stopPropagation();deleteNode('${n.id}')">✕</button>
       </div>`;
     });
 
@@ -259,6 +364,109 @@ function renderBoard() {
 
   html += '</div>';
   container.innerHTML = html;
+}
+
+// ── Drag ──
+let dragId = null, dragStartX, dragStartY, dragNodeX, dragNodeY;
+function startDrag(e, id) {
+  e.preventDefault();
+  dragId = id;
+  const n = BOARD.nodes.find(n => n.id === id);
+  dragStartX = e.clientX; dragStartY = e.clientY;
+  dragNodeX = n.x || 0; dragNodeY = n.y || 0;
+  const el = document.querySelector(`.node[data-id="${id}"]`);
+  if (el) el.classList.add('dragging');
+  document.addEventListener('mousemove', onDrag);
+  document.addEventListener('mouseup', endDrag);
+}
+function onDrag(e) {
+  if (!dragId) return;
+  const dx = e.clientX - dragStartX, dy = e.clientY - dragStartY;
+  const n = BOARD.nodes.find(n => n.id === dragId);
+  if (!n) return;
+  n.x = Math.max(0, dragNodeX + dx);
+  n.y = Math.max(0, dragNodeY + dy);
+  const el = document.querySelector(`.node[data-id="${dragId}"]`);
+  if (el) { el.style.left = n.x + 'px'; el.style.top = n.y + 'px'; }
+  requestAnimationFrame(() => { if (dragId) renderBoard(); });
+}
+function endDrag() {
+  if (dragId) {
+    const el = document.querySelector(`.node[data-id="${dragId}"]`);
+    if (el) el.classList.remove('dragging');
+    dragId = null;
+    persistBoard();
+  }
+  document.removeEventListener('mousemove', onDrag);
+  document.removeEventListener('mouseup', endDrag);
+}
+
+// Touch support
+document.addEventListener('touchstart', e => {
+  const node = e.target.closest('.node');
+  if (!node) return;
+  const id = node.dataset.id;
+  const n = BOARD.nodes.find(x => x.id === id);
+  if (!n) return;
+  const touch = e.touches[0];
+  dragId = id; dragStartX = touch.clientX; dragStartY = touch.clientY;
+  dragNodeX = n.x || 0; dragNodeY = n.y || 0;
+  node.classList.add('dragging');
+}, { passive: true });
+document.addEventListener('touchmove', e => {
+  if (!dragId) return;
+  const touch = e.touches[0];
+  const n = BOARD.nodes.find(x => x.id === dragId);
+  if (!n) return;
+  n.x = Math.max(0, dragNodeX + touch.clientX - dragStartX);
+  n.y = Math.max(0, dragNodeY + touch.clientY - dragStartY);
+  renderBoard();
+}, { passive: true });
+document.addEventListener('touchend', () => { if (dragId) { dragId = null; persistBoard(); } });
+
+// ── Add/delete nodes ──
+function addNode() {
+  const lane = BOARD.lanes[0]?.id || 'pm';
+  const id = 'n' + Date.now();
+  BOARD.nodes.push({ id, lane, x: 20, y: 20, title: 'Nuevo paso', text: '', tool: '', stage: '' });
+  persistBoard();
+  renderBoard();
+  editNode(id);
+}
+function deleteNode(id) {
+  BOARD.nodes = BOARD.nodes.filter(n => n.id !== id);
+  BOARD.edges = (BOARD.edges || []).filter(e => e.from !== id && e.to !== id);
+  persistBoard(); renderBoard();
+}
+
+// ── Edit panel ──
+let editingNodeId = null;
+function editNode(id) {
+  const n = BOARD.nodes.find(x => x.id === id);
+  if (!n) return;
+  editingNodeId = id;
+  document.getElementById('epTitle').value = n.title || '';
+  document.getElementById('epText').value = n.text || '';
+  document.getElementById('epTool').value = n.tool || '';
+  document.getElementById('epStage').value = n.stage || '';
+  const laneSelect = document.getElementById('epLane');
+  laneSelect.innerHTML = BOARD.lanes.map(l => `<option value="${l.id}" ${l.id===n.lane?'selected':''}>${esc(l.name)}</option>`).join('');
+  document.getElementById('editPanel').classList.add('open');
+}
+function saveNode() {
+  if (!editingNodeId) return;
+  const n = BOARD.nodes.find(x => x.id === editingNodeId);
+  if (!n) return;
+  n.title = document.getElementById('epTitle').value;
+  n.text = document.getElementById('epText').value;
+  n.tool = document.getElementById('epTool').value;
+  n.stage = document.getElementById('epStage').value;
+  n.lane = document.getElementById('epLane').value;
+  persistBoard(); closePanel(); renderBoard();
+}
+function closePanel() {
+  editingNodeId = null;
+  document.getElementById('editPanel').classList.remove('open');
 }
 
 renderBoard();
